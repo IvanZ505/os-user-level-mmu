@@ -1,4 +1,19 @@
 #include "my_vm.h"
+#include <stdio.h>
+#include <sys/mman.h>
+#include <pthread.h> 
+
+// Physical memory array. The size is defined by MEMSIZE
+void * physical_memory;
+// Bitmaps
+unsigned char *phys_bmap;
+unsigned char *virt_bmap;
+
+// pg directory
+pde_t pgdir[1024];
+
+// TLB Mutex
+pthread_mutex_t tlb_lock;
 
 /*
 Function responsible for allocating and setting your physical memory 
@@ -11,7 +26,32 @@ void set_physical_mem() {
     
     //HINT: Also calculate the number of physical and virtual pages and allocate
     //virtual and physical bitmaps and initialize them
+    unsigned int num_phys = MEMSIZE / PGSIZE;
+    unsigned int num_virt = MAX_MEMSIZE / PGSIZE; 
 
+    physical_memory = mmap(NULL, MEMSIZE, PROT_READ | PROT_WRITE,  MAP_PRIVATE, -1, 0);
+    if (physical_memory == MAP_FAILED) {
+        perror("mmap failed");
+        exit(EXIT_FAILURE);
+    }
+    size_t phys_size = (num_phys + 7) / 8;
+    phys_bmap = (unsigned char *)malloc(phys_size);
+    if (phys_bmap == NULL) {
+        perror("malloc phys_bmap failed");
+        exit(EXIT_FAILURE);
+    }
+
+    memset(phys_bmap, 0, phys_size);
+
+    
+    size_t virt_size = (num_virt + 7) / 8;
+    virt_bmap = (unsigned char *)malloc(virt_size);
+    if (virt_bmap == NULL) {
+        perror("malloc virt_bmap failed");
+        exit(EXIT_FAILURE);
+    }
+
+    memset(virt_bmap, 0, virt_size);
 }
 
 
@@ -84,7 +124,15 @@ pte_t *translate(pde_t *pgdir, void *va) {
     * Part 2 HINT: Check the TLB before performing the translation. If
     * translation exists, then you can return physical address from the TLB.
     */
+   // Only for 32-bit systems so far
+    
+    // Get the page directory index
+    unsigned long pd_index = ((unsigned long)va >> 22);
+    // Get the page table index
+    unsigned long pt_index = ((unsigned long)va >> 12);
 
+    // Get the page table entry
+    pte_t *page_table = (pte_t *)pgdir[pd_index];
 
     //If translation not successful, then return NULL
     return NULL; 
