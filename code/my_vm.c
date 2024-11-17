@@ -3,6 +3,13 @@
 #include <sys/mman.h>
 #include <pthread.h> 
 
+
+#define get_top_bits(x, y) ((x) >> (32 - y))
+
+#define get_middle_bits(x, y, z) ((x >> (z)) & ((1UL << (y)) - 1))
+
+#define get_bottom_bits(x, y) (((1UL << y) - 1) & (x))
+
 // Physical memory array. The size is defined by MEMSIZE
 void * physical_memory;
 // Bitmaps
@@ -10,10 +17,34 @@ unsigned char *phys_bmap;
 unsigned char *virt_bmap;
 
 // pg directory
-pde_t pgdir[1024];
+pde_t *pgdir;
 
 // TLB Mutex
 pthread_mutex_t tlb_lock;
+
+static void set_bit_at_index(char *bitmap, int index)
+{
+    //Little endian
+    size_t block_index = index / 8;
+    bitmap[block_index] = bitmap[block_index] ^ (1 << (index - block_index * 8));
+
+    return;
+}
+
+
+/* 
+ * GETTING A BIT AT AN INDEX 
+ * Function to get a bit at "index"
+ */
+static int get_bit_at_index(char *bitmap, int index)
+{
+    //Get to the location in the character bitmap array
+    //Little endian
+    size_t block_index = index / 8;
+    return (bitmap[block_index] >> (index - block_index * 8)) & 0x1;
+
+}
+
 
 /*
 Function responsible for allocating and setting your physical memory 
@@ -26,10 +57,10 @@ void set_physical_mem() {
     
     //HINT: Also calculate the number of physical and virtual pages and allocate
     //virtual and physical bitmaps and initialize them
-    unsigned int num_phys = MEMSIZE / PGSIZE;
-    unsigned int num_virt = MAX_MEMSIZE / PGSIZE; 
+    unsigned int num_phys = MEMSIZE / PGSIZE;  // 1GB / 4KB = 262144
+    unsigned int num_virt = MAX_MEMSIZE / PGSIZE; // 4GB / 4KB = 1048576
 
-    physical_memory = mmap(NULL, MEMSIZE, PROT_READ | PROT_WRITE,  MAP_PRIVATE, -1, 0);
+    physical_memory = mmap(NULL, MEMSIZE, PROT_READ | PROT_WRITE,  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (physical_memory == MAP_FAILED) {
         perror("mmap failed");
         exit(EXIT_FAILURE);
@@ -52,6 +83,18 @@ void set_physical_mem() {
     }
 
     memset(virt_bmap, 0, virt_size);
+
+    // Set pd directory to the physical memory
+    pgdir = (pde_t *)physical_memory;
+
+    set_bit_at_index(phys_bmap, 0);
+    set_bit_at_index(virt_bmap, 0); 
+
+    // Initialize TLB lock for thread safety
+    if (pthread_mutex_init(&tlb_lock, NULL) != 0) {
+        perror("pthread_mutex_init failed");
+        exit(EXIT_FAILURE);
+    }
 }
 
 
@@ -127,15 +170,26 @@ pte_t *translate(pde_t *pgdir, void *va) {
    // Only for 32-bit systems so far
     
     // Get the page directory index
-    unsigned long pd_index = ((unsigned long)va >> 22);
-    // Get the page table index
-    unsigned long pt_index = ((unsigned long)va >> 12);
+    unsigned long vaddress = (unsigned long)va;
+    unsigned long pd_index = get_top_bits(vaddress, 10);
+    unsigned long pt_index = get_middle_bits(vaddress, 10, 12);
+    unsigned long offset = get_bottom_bits(vaddress, 12);
 
     // Get the page table entry
     pte_t *page_table = (pte_t *)pgdir[pd_index];
+    if (page_table == NULL) {
+        return NULL;
+    }
 
-    //If translation not successful, then return NULL
-    return NULL; 
+    pte_t physical_page = page_table[pt_index];
+    if ((physical_page & 0x1) == 0) {
+        return NULL;
+    }
+
+    // Use binary OR to combine the physical page and the offset
+    unsigned long physical_address = (physical_page & ~0xFFF) | offset;
+
+    return (pte_t *)physical_address;
 }
 
 
@@ -145,7 +199,7 @@ as an argument, and sets a page table entry. This function will walk the page
 directory to see if there is an existing mapping for a virtual address. If the
 virtual address is not present, then a new entry will be added
 */
-int
+int 
 map_page(pde_t *pgdir, void *va, void *pa)
 {
 
