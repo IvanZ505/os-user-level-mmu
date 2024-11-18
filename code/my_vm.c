@@ -22,6 +22,8 @@ unsigned char *malloc_allocated;
 // page directory
 pde_t* pgdir;
 
+// TLB
+struct tlb_entry tlb_store[TLB_ENTRIES];
 
 // TLB Mutex
 pthread_mutex_t tlb_lock;
@@ -148,6 +150,10 @@ void set_physical_mem() {
     }
 }
 
+int TLB_hash(void *va) {
+    int top_bits = get_top_bits((unsigned long)va, offset_bits);
+    return (int) va % TLB_ENTRIES;
+}
 
 /*
  * Part 2: Add a virtual to physical page translation to the TLB.
@@ -156,13 +162,22 @@ void set_physical_mem() {
  * Note: Make sure this is thread safe by locking around critical 
  *       data structures touched when interacting with the TLB
  */
-int
-TLB_add(void *va, void *pa)
+int TLB_add(void *va, void *pa)
 {
+    if(va == NULL || pa == NULL) {
+        return -1;
+    }
 
     /*Part 2 HINT: Add a virtual to physical page translation to the TLB */
+    pthread_mutex_lock(&tlb_lock);
 
-    return -1;
+    int hash = TLB_hash(va);
+    struct tlb_entry new_entry = {va, pa, 1};
+    tlb_store[hash] = new_entry;
+
+    pthread_mutex_unlock(&tlb_lock);
+
+    return 0;
 }
 
 
@@ -178,12 +193,16 @@ pte_t *
 TLB_check(void *va) {
 
     /* Part 2: TLB lookup code here */
+    pthread_mutex_lock(&tlb_lock);
+    int hash = TLB_hash(va);
+    struct tlb_entry entry = tlb_store[hash];
+    if (entry.valid == 1 && entry.vpn == va) {
+        pthread_mutex_unlock(&tlb_lock);
+        return (pte_t *)entry.pfn;
+    }
 
-
-
-   /*This function should return a pte_t pointer*/
-
-   return NULL;
+    pthread_mutex_unlock(&tlb_lock);
+    return NULL;
 }
 
 
@@ -491,10 +510,42 @@ int put_data(void *va, void *val, int size) {
      * function.
      */
 
+    unsigned long vaddr = (unsigned long) va;
+    unsigned char *src = (unsigned char *)val;
+    int written = 0;
+
+    if(!vaddr || !src || size <= 0) {
+        printf("put_data failed");
+        return -1;
+    }
+
+    
+    while(written < size) {
+        // Each time it returns here, recalculate for the next physical page addr.
+        char *physical_address = (char *)translate(pgdir, (void *)vaddr);
+        if (physical_address == NULL) {
+            printf("put_data failed");
+            return -1;
+        }
+
+        // Gives us the amount of bytes we can copy to the page
+        int page_offset = vaddr % PGSIZE;
+        int bytes_to_copy = PGSIZE - page_offset;
+        if (bytes_to_copy > (size - written)) {
+            bytes_to_copy = size - written;
+        }
+
+        memcpy(physical_address, src, bytes_to_copy);
+
+        written += bytes_to_copy;
+        src += bytes_to_copy;
+        vaddr += bytes_to_copy;
+    }
+
 
     /*return -1 if put_data failed and 0 if put is successfull*/
 
-    return -1;
+    return 0;
 }
 
 
