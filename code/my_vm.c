@@ -555,7 +555,39 @@ void get_data(void *va, void *val, int size) {
     /* HINT: put the values pointed to by "va" inside the physical memory at given
     * "val" address. Assume you can access "val" directly by derefencing them.
     */
+    int written;
+    
+    while(written < size) {
+        unsigned long offset = get_bottom_bits((unsigned long)va, offset_bits);
+        unsigned long vaddr = (unsigned long)va;
+        // Check if address in in TLB
+        pte_t entry = TLB_check((void *)vaddr);
+        if (entry == NULL) {
+            // If not, translate and add to TLB
+            entry = (pte_t)translate(pgdir, va);
+            if(entry == NULL) {
+                printf("get_data failed\n");
+                return;
+            }
+        }
 
+        // Check if size is greater than the page size
+        int page_offset = vaddr % PGSIZE;
+        int bytes_to_copy = PGSIZE - page_offset;
+        if (bytes_to_copy > (size - written)) {
+            bytes_to_copy = size - written;
+        }
+
+        // Create my physical address
+        unsigned long physical_address = (entry & ~0xFFF) | offset;
+
+        unsigned char *dst = (unsigned char *)val;
+        memcpy(dst, (void *)physical_address, bytes_to_copy);
+        written += bytes_to_copy;
+        dst += written;
+        physical_address += written;
+        vaddr += written;
+    }
 }
 
 
