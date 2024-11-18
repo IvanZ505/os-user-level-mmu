@@ -18,6 +18,9 @@
 // Size of "physcial memory"
 #define MEMSIZE 1024*1024*1024
 
+#define NUM_PHYS_PAGES MEMSIZE / PGSIZE
+#define NUM_VIRT_PAGES MAX_MEMSIZE / PGSIZE
+
 // Represents a page table entry
 typedef unsigned long pte_t;
 
@@ -32,15 +35,15 @@ struct tlb_entry {
     bool valid;
 };
 
-//Structure to represents TLB
-struct tlb {
-    /*Assume your TLB is a direct mapped TLB with number of entries as TLB_ENTRIES
-    * Think about the size of each TLB entry that performs virtual to physical
-    * address translation.
-    */
-    struct tlb_entry entries[TLB_ENTRIES];
-};
-struct tlb tlb_store;
+// //Structure to represents TLB
+// struct tlb {
+//     /*Assume your TLB is a direct mapped TLB with number of entries as TLB_ENTRIES
+//     * Think about the size of each TLB entry that performs virtual to physical
+//     * address translation.
+//     */
+//     struct tlb_entry entries[TLB_ENTRIES];
+// };
+// struct tlb tlb_store;
 
 // Setup functions
 void set_physical_mem();
@@ -51,7 +54,7 @@ pte_t *TLB_check(void *va);
 void print_TLB_missrate();
 
 // Page Table Functions
-pte_t* translate(pde_t *pgdir, void *va);
+void* translate(pde_t *pgdir, void *va);
 int map_page(pde_t *pgdir, void *va, void* pa);
 
 // Allocation functions
@@ -62,3 +65,4 @@ void n_free(void *va, int size);
 int put_data(void *va, void *val, int size);
 void get_data(void *va, void *val, int size);
 void mat_mult(void *mat1, void *mat2, int size, void *answer);
+#endif
