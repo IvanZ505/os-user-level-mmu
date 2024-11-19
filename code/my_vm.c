@@ -24,6 +24,10 @@ pde_t* pgdir;
 
 // TLB
 struct tlb_entry tlb_store[TLB_ENTRIES];
+unsigned int tlb_hit = 0;
+unsigned int tlb_miss = 0;
+unsigned int tlb_total = 0;
+
 
 // TLB Mutex
 pthread_mutex_t tlb_lock;
@@ -196,13 +200,21 @@ TLB_check(void *va) {
 
     /* Part 2: TLB lookup code here */
     pthread_mutex_lock(&tlb_lock);
+    tlb_total++;
     int hash = TLB_hash(va);
     struct tlb_entry entry = tlb_store[hash];
-    if (entry.valid == 1 && entry.vpn == va) {
+
+    // Get every bit except the offset bits in order to check the vpn entry
+    unsigned long va_b = get_top_bits((unsigned long)va, 32 - offset_bits);
+    unsigned long vpn_b = get_top_bits((unsigned long)entry.vpn, 32 - offset_bits);
+
+    if (entry.valid == 1 && vpn_b == va_b) {
+        tlb_hit++;
         pthread_mutex_unlock(&tlb_lock);
         return (pte_t *)entry.pfn;
     }
 
+    tlb_miss++;
     pthread_mutex_unlock(&tlb_lock);
     return NULL;
 }
@@ -219,8 +231,9 @@ print_TLB_missrate()
 
     /*Part 2 Code here to calculate and print the TLB miss rate*/
 
-
-
+    if (tlb_total != 0) {
+        miss_rate = (double)tlb_miss / tlb_total;
+    }
 
     fprintf(stderr, "TLB miss rate %lf \n", miss_rate);
 }
@@ -240,6 +253,15 @@ void *translate(pde_t *pgdir, void *va) {
     */
    // Only for 32-bit systems so far
 
+    if(va == NULL) {
+        return NULL;
+    }
+
+    pte_t *phys_addr = TLB_check(va);
+    // All of these addresses return with some arbitrary offset
+    if(phys_addr != NULL) {
+        return (void *)phys_addr;
+    }
 
     // Get the page indexes
     unsigned long vaddress = (unsigned long)va;
@@ -269,7 +291,7 @@ void *translate(pde_t *pgdir, void *va) {
     unsigned long physical_address = (phys_page_ptr & ~((1 << offset_bits) - 1)) | offset;
     // printf("bitshift: %d", (1 << offset_bits) - 1 == 0x1FFF);
 
-    // Discussed in @77 on Piazza
+    TLB_add(va, (void *)physical_address);
     return (void *)physical_address;
 }
 
