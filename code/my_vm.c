@@ -156,8 +156,8 @@ void set_physical_mem() {
     }
 }
 
-int TLB_hash(void *va) {
-    int top_bits = get_top_bits((unsigned long)va, offset_bits);
+int TLB_hash(unsigned long va) {
+    int top_bits = get_top_bits(va, offset_bits);
     return (int) va % TLB_ENTRIES;
 }
 
@@ -177,10 +177,15 @@ int TLB_add(void *va, void *pa)
     /*Part 2 HINT: Add a virtual to physical page translation to the TLB */
     pthread_mutex_lock(&tlb_lock);
 
-    int hash = TLB_hash(va);
-    struct tlb_entry new_entry = {va, pa, 1};
-    tlb_store[hash] = new_entry;
+    // Strip the offsets and store the vpns stripped
+    unsigned long vpn = ((unsigned long)va) & ~((1 << offset_bits) - 1);
+    unsigned long pfn = ((unsigned long)pa) & ~((1 << offset_bits) - 1);
 
+
+    int hash = TLB_hash(vpn);
+    struct tlb_entry new_entry = {vpn, pfn, 1};
+    tlb_store[hash] = new_entry;
+    // printf("Added to TLB: vpn: %p, pfn: %p\n", vpn, pfn);
     pthread_mutex_unlock(&tlb_lock);
 
     return 0;
@@ -201,14 +206,17 @@ TLB_check(void *va) {
     /* Part 2: TLB lookup code here */
     pthread_mutex_lock(&tlb_lock);
     tlb_total++;
-    int hash = TLB_hash(va);
+
+    // Check if the entry is valid and the vpn matches the va, mask the offset bits from the va
+    unsigned long va_b = ((unsigned long)va) & ~((1 << offset_bits) - 1);
+
+    // printf("Checking TLB: va: %p\n", va_b);
+    int hash = TLB_hash(va_b);
     struct tlb_entry entry = tlb_store[hash];
 
-    // Get every bit except the offset bits in order to check the vpn entry
-    unsigned long va_b = get_top_bits((unsigned long)va, 32 - offset_bits);
-    unsigned long vpn_b = get_top_bits((unsigned long)entry.vpn, 32 - offset_bits);
+    
 
-    if (entry.valid == 1 && vpn_b == va_b) {
+    if (entry.valid == 1 && entry.vpn == va_b) {
         tlb_hit++;
         pthread_mutex_unlock(&tlb_lock);
         return (pte_t *)entry.pfn;
@@ -257,17 +265,20 @@ void *translate(pde_t *pgdir, void *va) {
         return NULL;
     }
 
-    pte_t *phys_addr = TLB_check(va);
+     // Get the page indexes
+    unsigned long vaddress = (unsigned long)va;
+    unsigned long offset = get_bottom_bits(vaddress, offset_bits);
+
+    pte_t phys_addr = (unsigned long) TLB_check(va);
+    // printf("phys_addr: %p\n", phys_addr);
     // All of these addresses return with some arbitrary offset
     if(phys_addr != NULL) {
+        phys_addr = (phys_addr & ~((1 << offset_bits) - 1)) | offset;
         return (void *)phys_addr;
     }
 
-    // Get the page indexes
-    unsigned long vaddress = (unsigned long)va;
     unsigned long pd_index = get_top_bits(vaddress, pd_bits);
     unsigned long pt_index = get_middle_bits(vaddress, pt_bits, offset_bits);
-    unsigned long offset = get_bottom_bits(vaddress, offset_bits);
 
     // inshallah, may Allah protect us from these unsafe memory operations
 
