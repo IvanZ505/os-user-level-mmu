@@ -250,7 +250,7 @@ void *translate(pde_t *pgdir, void *va) {
     // Get the page table entry
     pte_t* page_table = (pte_t*) pgdir[pd_index];
     if (page_table == NULL) {
-        printf("Page table not allocate\n");
+        printf("Page table not allocated\n");
         return NULL;
     }
 
@@ -474,7 +474,7 @@ void n_free(void *va, int size) {
             printf("n_free failed\n");
             return;
         }
-        vaddress += 4;
+        vaddress += 1;
     }
 
     // Check that va+size isn't over our bounds
@@ -493,7 +493,7 @@ void n_free(void *va, int size) {
             set_bit_at_index(malloc_allocated, bit_index);
         }
         prev_bit_index = bit_index;
-        vaddress += 4;
+        vaddress += 1;
     }   
 }
 
@@ -510,6 +510,8 @@ int put_data(void *va, void *val, int size) {
      * function.
      */
 
+    // printf("Before:: put_data address: %p, value at pointer: %d\n", translate(pgdir, va), *((int*)translate(pgdir, va)));
+
     unsigned long vaddr = (unsigned long) va;
     unsigned char *src = (unsigned char *)val;
     int written = 0;
@@ -524,7 +526,7 @@ int put_data(void *va, void *val, int size) {
         // Each time it returns here, recalculate for the next physical page addr.
         char *physical_address = (char *)translate(pgdir, (void *)vaddr);
         if (physical_address == NULL) {
-            printf("put_data failed");
+            printf("put_data failed\n");
             return -1;
         }
 
@@ -535,12 +537,20 @@ int put_data(void *va, void *val, int size) {
             bytes_to_copy = size - written;
         }
 
+        // Makes sure we are writting data to memory already allocated
+        if (get_bit_at_index(malloc_allocated, vaddr>>offset_bits) == 0) {
+            printf("put_data failed: memory not allocated\n");
+            return -1;
+        }
+
         memcpy(physical_address, src, bytes_to_copy);
 
         written += bytes_to_copy;
         src += bytes_to_copy;
         vaddr += bytes_to_copy;
     }
+
+    // printf("After:: put_data address: %p, value at pointer: %d\n", translate(pgdir, va), *((int*)translate(pgdir, va)));
 
 
     /*return -1 if put_data failed and 0 if put is successfull*/
@@ -555,39 +565,52 @@ void get_data(void *va, void *val, int size) {
     /* HINT: put the values pointed to by "va" inside the physical memory at given
     * "val" address. Assume you can access "val" directly by derefencing them.
     */
-    int written;
+
+    int read = 0;
     
-    while(written < size) {
-        unsigned long offset = get_bottom_bits((unsigned long)va, offset_bits);
-        unsigned long vaddr = (unsigned long)va;
+    unsigned long offset = get_bottom_bits((unsigned long)va, offset_bits);
+    unsigned long vaddr = (unsigned long)va;
+
+    while(read < size) {
+        unsigned long offset = get_bottom_bits(vaddr, offset_bits);
+
         // Check if address in in TLB
-        pte_t entry = TLB_check((void *)vaddr);
-        if (entry == NULL) {
-            // If not, translate and add to TLB
-            entry = (pte_t)translate(pgdir, va);
-            if(entry == NULL) {
-                printf("get_data failed\n");
-                return;
-            }
-        }
+        // pte_t entry = TLB_check((void *)vaddr);
+        // if (entry == NULL) {
+        //     // If not, translate and add to TLB
+        //     entry = (pte_t)translate(pgdir, va);
+        //     if(entry == NULL) {
+        //         printf("get_data failed\n");
+        //         return;
+        //     }
+        // }
+
+
+        void* physical_address = translate(pgdir, (void*)vaddr);
 
         // Check if size is greater than the page size
         int page_offset = vaddr % PGSIZE;
         int bytes_to_copy = PGSIZE - page_offset;
-        if (bytes_to_copy > (size - written)) {
-            bytes_to_copy = size - written;
+        if (bytes_to_copy > (size - read)) {
+            bytes_to_copy = size - read;
         }
 
-        // Create my physical address
-        unsigned long physical_address = (entry & ~0xFFF) | offset;
+        // Makes sure we are reading data already allocated
+        if (get_bit_at_index(malloc_allocated, vaddr>>offset_bits) == 0) {
+            printf("put_data failed: memory not allocated\n");
+            return -1;
+        }
 
         unsigned char *dst = (unsigned char *)val;
-        memcpy(dst, (void *)physical_address, bytes_to_copy);
-        written += bytes_to_copy;
-        dst += written;
-        physical_address += written;
-        vaddr += written;
+        memcpy(val, (void *)physical_address, bytes_to_copy);
+        read += bytes_to_copy;
+        dst += bytes_to_copy;
+        vaddr += bytes_to_copy;
     }
+
+    // printf("get_data address: %p, value stored: %d\n", translate(pgdir, vaddr), *((int*)translate(pgdir, vaddr)));
+    // printf("value stored at val: %d\n", *((int*)val));
+
 }
 
 
