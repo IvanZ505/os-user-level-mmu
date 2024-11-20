@@ -1,7 +1,7 @@
 #include "../my_vm.h"
 #include <time.h>
 #include <pthread.h>
-#define num_threads 40
+#define num_threads 42
 
 void *pointers[num_threads];
 int ids[num_threads];
@@ -123,4 +123,5 @@ int main() {
     if (!flag) {
         printf("Some Problem with free!\n");
     }
+    print_TLB_missrate();
 }
