@@ -560,7 +560,7 @@ int put_data(void *va, void *val, int size) {
     unsigned char *src = (unsigned char *)val;
     int written = 0;
 
-    if(!vaddr || !src || size <= 0) {
+    if(!vaddr || !src ) {
         printf("put_data failed");
         // pthread_mutex_unlock(&malloc_free_lock);
         return -1;
@@ -610,6 +610,11 @@ int put_data(void *va, void *val, int size) {
 void get_data(void *va, void *val, int size) {
     // pthread_mutex_lock(&malloc_free_lock);
 
+    if(va == NULL || val == NULL || size <= 0) {
+        printf("get_data failed: invalid parameters\n");
+        return;
+    }
+
 
     /* HINT: put the values pointed to by "va" inside the physical memory at given
     * "val" address. Assume you can access "val" directly by derefencing them.
@@ -619,6 +624,7 @@ void get_data(void *va, void *val, int size) {
     
     unsigned long offset = get_bottom_bits((unsigned long)va, offset_bits);
     unsigned long vaddr = (unsigned long)va;
+    printf("Initial vaddr: %p\n", vaddr);
 
     while(read < size) {
         unsigned long offset = get_bottom_bits(vaddr, offset_bits);
@@ -626,28 +632,33 @@ void get_data(void *va, void *val, int size) {
         // Check if address in in TLB
         // Commited it out cause it was giving me issues, could be because I'm stupid
 
+
         void* physical_address = (void*) TLB_check((void *)vaddr);
-        if (physical_address == NULL) {
+        // printf("1 virtual and physical address: %p, %p\n", vaddr, physical_address);
+
+        if(physical_address == NULL) {
             // If not, translate and add to TLB
             physical_address = translate(pgdir, va);
+            printf("2 virtual and physical address: %p, %p\n", vaddr, physical_address);
             if(physical_address == NULL) {
                 printf("get_data failed\n");
                 return;
             }
+            TLB_add(va, physical_address);
         }
 
         // Check if size is greater than the page size
         int page_offset = vaddr % PGSIZE;
         int bytes_to_copy = PGSIZE - page_offset;
-        if (bytes_to_copy > (size - read)) {
+        if(bytes_to_copy > (size - read)) {
             bytes_to_copy = size - read;
         }
 
         // Makes sure we are reading data already allocated
-        if (get_bit_at_index(malloc_allocated, vaddr>>offset_bits) == 0) {
-            printf("put_data failed: memory not allocated\n");
+        if(get_bit_at_index(malloc_allocated, vaddr>>offset_bits) == 0) {
+            printf("get_data failed: memory not allocated\n");
             pthread_mutex_unlock(&malloc_free_lock);
-            return -1;
+            return;
         }
 
         unsigned char *dst = (unsigned char *)val;
