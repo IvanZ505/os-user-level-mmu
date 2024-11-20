@@ -5,7 +5,7 @@
 #include <string.h>
 
 
-#define get_top_bits(x, y) ((x) >> (32 - y))
+#define get_top_bits(x, y) ((x) >> (64 - y))
 
 #define get_middle_bits(x, y, z) ((x >> (z)) & ((1UL << (y)) - 1))
 
