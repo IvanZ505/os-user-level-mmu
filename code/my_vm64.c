@@ -81,7 +81,7 @@ int int_log2(int num) {
 Function responsible for allocating and setting your physical memory 
 */
 void set_physical_mem() {
-    // For a 32 bit
+    // For a 64 bit
 
     //Allocate physical memory using mmap or malloc; this is the total size of
     //your memory you are simulating
@@ -145,8 +145,9 @@ void set_physical_mem() {
 
     // Grabs # of bits for each three sections of address based on page size
     offset_bits = int_log2(PGSIZE);
-    pd_bits = (32 - offset_bits) / 2;
-    pt_bits = 32 - pd_bits - offset_bits;
+    pd_bits = (64 - offset_bits) / 2;
+    pt_bits = 64 - pd_bits - offset_bits;
+    // Calculate how much each pt will be with 4 levels (incl. pd)
 
 
     // Initialize TLB lock for thread safety
