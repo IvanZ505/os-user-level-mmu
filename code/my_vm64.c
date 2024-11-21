@@ -39,6 +39,8 @@ pthread_mutex_t malloc_free_lock;
 unsigned int offset_bits;
 unsigned int pd_bits;
 unsigned int pt_bits;
+unsigned int pt2_bits;
+unsigned int pt3_bits;
 
 void *get_next_avail(int num_pages, int isUser);
 
@@ -145,8 +147,12 @@ void set_physical_mem() {
 
     // Grabs # of bits for each three sections of address based on page size
     offset_bits = int_log2(PGSIZE);
-    pd_bits = (64 - offset_bits) / 2;
-    pt_bits = 64 - pd_bits - offset_bits;
+    int remaining_bits = 64 - offset_bits;
+    int remainder = remaining_bits % 4;
+    pd_bits = (remaining_bits - remainder) / 4 + (remainder > 0 ? 1 : 0);
+    pt_bits = (remaining_bits - remainder) / 4 + (remainder > 1 ? 1 : 0);
+    pt2_bits = (remaining_bits - remainder) / 4 + (remainder > 2 ? 1 : 0);
+    pt3_bits = (remaining_bits - remainder) / 4;
     // Calculate how much each pt will be with 4 levels (incl. pd)
 
 
@@ -270,6 +276,7 @@ void *translate(pde_t *pgdir, void *va) {
     unsigned long vaddress = (unsigned long)va;
     unsigned long offset = get_bottom_bits(vaddress, offset_bits);
 
+    // Need to fix TLB for 64 bit
     pte_t phys_addr = (unsigned long) TLB_check(va);
     // printf("phys_addr: %p\n", phys_addr);
     // All of these addresses return with some arbitrary offset
@@ -280,6 +287,24 @@ void *translate(pde_t *pgdir, void *va) {
 
     unsigned long pd_index = get_top_bits(vaddress, pd_bits);
     unsigned long pt_index = get_middle_bits(vaddress, pt_bits, offset_bits);
+    unsigned long pt2_index = get_middle_bits(vaddress, offset_bits + pd_bits + pt_bits, pt2_bits);
+    unsigned long pt3_index = get_middle_bits(vaddress, offset_bits + pd_bits + pt_bits + pt2_bits, pt3_bits);
+
+    // Traverse the page table hierarchy
+    pte_t *pt_table = (pte_t *)pgdir[pd_index];
+    if (!pt_table) return NULL;
+
+    pte_t *pt2_table = (pte_t *)pt_table[pt_index];
+    if (!pt2_table) return NULL;
+
+    pte_t *pt3_table = (pte_t *)pt2_table[pt2_index];
+    if (!pt_table) return NULL;
+
+    pte_t phys_page = pt3_table[pt3_index];
+    if (phys_page == 0) return NULL;
+
+    TLB_add(va, (void *)phys_page);
+    return (void *)((phys_page & ~((1 << offset) - 1)) | offset);
 
     // inshallah, may Allah protect us from these unsafe memory operations
 
@@ -348,11 +373,12 @@ int map_page(pde_t *pgdir, void *va, void *pa)
     unsigned long vaddress = (unsigned long)va;
     unsigned long pd_index = get_top_bits(vaddress, pd_bits);
     unsigned long pt_index = get_middle_bits(vaddress, pt_bits, offset_bits);
-
+    unsigned long pt2_index = get_middle_bits(vaddress, offset_bits + pd_bits + pt_bits, pt2_bits);
+    unsigned long pt3_index = get_middle_bits(vaddress, offset_bits + pd_bits + pt_bits + pt2_bits, pt3_bits);
 
     // Get the page table entry
-    pte_t* page_table = (pte_t*) pgdir[pd_index];
-    if (page_table == NULL) {
+    pte_t* pt_table = (pte_t*) pgdir[pd_index];
+    if (pt_table == NULL) {
         // Allocate page to this new page table, need to find free page
 
         // Note sure if we need to allocate virtual mem for page
@@ -364,18 +390,34 @@ int map_page(pde_t *pgdir, void *va, void *pa)
         }
 
         pgdir[pd_index] = (pde_t) phys_page_address;
-        page_table = (pte_t*) pgdir[pd_index];
+        pt_table = (pte_t*) pgdir[pd_index];
+    }
+
+    pte_t *pt2_table = (pte_t *)pt_table[pt_index];
+    if (!pt2_table) {
+        void* virt_page_address = get_next_avail(1, 0);
+        pt2_table = get_next_avail_phys();
+        if (!pt2_table || !virt_page_address) return -1;
+        pt_table[pt_index] = (pde_t)pt2_table;
+    }
+
+    pte_t *pt3_table = (pte_t *)pt2_table[pt2_index];
+    if (!pt3_table) {
+        void* virt_page_address = get_next_avail(1, 0);
+        pt3_table = get_next_avail_phys();
+        if (!pt3_table || !virt_page_address) return -1;
+        pt2_table[pd_index] = (pde_t)pt3_table;
     }
 
 
     // Add TLB later
     // printf("before loading page; page_table: %p, pd_index %d, pt_index %d\n", page_table,pd_index ,pt_index);
 
-    void* phys_page_ptr = (void*) page_table[pt_index];
+    void* phys_page_ptr = (void*) pt3_table[pt3_index];
 
     if (phys_page_ptr == NULL) {
         // Connect virtual address to physical address 
-        page_table[pt_index] = (pte_t) pa;
+        pt3_table[pt_index] = (pte_t) pa;
 
     }
 
