@@ -512,7 +512,13 @@ void n_free(void *va, int size) {
         }
         prev_bit_index = bit_index;
         vaddress += 1;
-    }   
+    }
+    // invalidate TLB
+    pthread_mutex_lock(&tlb_lock);
+    if(tlb_store[TLB_hash((unsigned long)va)].vpn == ((unsigned long)va & ~((1 << offset_bits) - 1))) {
+        tlb_store[TLB_hash((unsigned long)va)].valid = 0;
+    }
+    pthread_mutex_unlock(&tlb_lock);
 }
 
 

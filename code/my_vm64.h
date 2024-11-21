@@ -15,10 +15,10 @@
 
 
 // Maximum size of virtual memory
-#define MAX_MEMSIZE 4ULL*1024*1024*1024*1024*1024
+#define MAX_MEMSIZE 4ULL*1024*1024*1024
 
 // Size of "physcial memory" for x86-64 architecture
-#define MEMSIZE 1024*1024*1024*1024*1024
+#define MEMSIZE 1024*1024*1024
 
 #define NUM_PHYS_PAGES MEMSIZE / PGSIZE
 #define NUM_VIRT_PAGES MAX_MEMSIZE / PGSIZE

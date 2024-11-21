@@ -1,4 +1,4 @@
-#include "my_vm.h"
+#include "my_vm64.h"
 #include <stdio.h>
 #include <sys/mman.h>
 #include <pthread.h> 
@@ -119,6 +119,7 @@ void set_physical_mem() {
 
     
     size_t virt_size = ((NUM_VIRT_PAGES + 7) / 8) * 8;
+    printf("virt_size: %d\n", virt_size);
     virt_page_bmap = (unsigned char *)malloc(virt_size);
     if (virt_page_bmap == NULL) {
         perror("malloc virt_bmap failed");
@@ -301,35 +302,12 @@ void *translate(pde_t *pgdir, void *va) {
     if (!pt_table) return NULL;
 
     pte_t phys_page = pt3_table[pt3_index];
-    if (phys_page == 0) return NULL;
-
+    if (phys_page == 0) {
+        printf("No physical page found\n");
+        return NULL;
+    }
     TLB_add(va, (void *)phys_page);
     return (void *)((phys_page & ~((1 << offset) - 1)) | offset);
-
-    // inshallah, may Allah protect us from these unsafe memory operations
-
-    // Get the page table entry
-    pte_t* page_table = (pte_t*) pgdir[pd_index];
-    if (page_table == NULL) {
-        printf("Page table not allocated\n");
-        return NULL;
-    }
-
-    // Add TLB later
-
-    pte_t phys_page_ptr = page_table[pt_index];
-    
-
-    if (phys_page_ptr == 0) {
-        return NULL;
-    }
-
-    // Use binary OR to combine the physical page and the offset
-    unsigned long physical_address = (phys_page_ptr & ~((1 << offset_bits) - 1)) | offset;
-    // printf("bitshift: %d", (1 << offset_bits) - 1 == 0x1FFF);
-
-    TLB_add(va, (void *)physical_address);
-    return (void *)physical_address;
 }
 
 
@@ -375,7 +353,8 @@ int map_page(pde_t *pgdir, void *va, void *pa)
     unsigned long pt_index = get_middle_bits(vaddress, pt_bits, offset_bits);
     unsigned long pt2_index = get_middle_bits(vaddress, offset_bits + pd_bits + pt_bits, pt2_bits);
     unsigned long pt3_index = get_middle_bits(vaddress, offset_bits + pd_bits + pt_bits + pt2_bits, pt3_bits);
-
+    printf("va: %p, pa: %p\n", va, pa);
+    printf("pd_index: %d, pt_index: %d, pt2_index: %d, pt3_index: %d\n", pd_index, pt_index, pt2_index, pt3_index);
     // Get the page table entry
     pte_t* pt_table = (pte_t*) pgdir[pd_index];
     if (pt_table == NULL) {
@@ -426,7 +405,7 @@ int map_page(pde_t *pgdir, void *va, void *pa)
 }
 
 
-/*Function that gets the next available page
+/*Function that gets the next available page 
 */
 void *get_next_avail(int num_pages, int isUser) {
     //Use virtual address bitmap to find the next free page
@@ -465,8 +444,7 @@ void *get_next_avail(int num_pages, int isUser) {
     }
 
     // bit_index gives us pdi and pti, we can set offset bits 0 (left shift)
-    unsigned long virtual_address = bit_index << offset_bits;
-
+    unsigned long virtual_address = ((unsigned long)bit_index << offset_bits) & 0xFFFFFFFFFFFFFFFF;
     return (void*) virtual_address;
 }
 
@@ -501,8 +479,8 @@ void *n_malloc(unsigned int num_bytes) {
     int num_pages = (num_bytes + PGSIZE - 1) / PGSIZE;
 
     // uint8_t type casting allows for pointer arithmetic
-    uint8_t* virtual_address = (uint8_t*)get_next_avail(num_pages, 1);
-
+    uint64_t* virtual_address = (uint64_t*)get_next_avail(num_pages, 1);
+    printf("virtual address: %p\n", virtual_address);
     if (virtual_address == NULL) {
         pthread_mutex_unlock(&malloc_free_lock);
         printf("No avaliable memory left for %d bytes\n", num_bytes);
