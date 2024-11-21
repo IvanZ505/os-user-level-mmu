@@ -286,28 +286,39 @@ void *translate(pde_t *pgdir, void *va) {
         return (void *)phys_addr;
     }
 
-    unsigned long pd_index = get_top_bits(vaddress, pd_bits);
-    unsigned long pt_index = get_middle_bits(vaddress, pt_bits, offset_bits);
-    unsigned long pt2_index = get_middle_bits(vaddress, offset_bits + pd_bits + pt_bits, pt2_bits);
-    unsigned long pt3_index = get_middle_bits(vaddress, offset_bits + pd_bits + pt_bits + pt2_bits, pt3_bits);
+    printf("within translate with va: %p\n", va);
 
+    unsigned long pd_index = get_top_bits(vaddress, pd_bits);
+    unsigned long pt_index = get_middle_bits(vaddress, pt_bits, offset_bits+pt2_bits+pt3_bits);
+    unsigned long pt2_index = get_middle_bits(vaddress,pt2_bits, offset_bits + pt3_bits);
+    unsigned long pt3_index = get_middle_bits(vaddress, pt3_bits, offset_bits);
+
+    printf("unpacked: pd_index: %d, pt_index: %d, pt2_index: %d, pt3_index: %d\n", pd_index, pt_index, pt2_index, pt3_index);
+    
     // Traverse the page table hierarchy
     pte_t *pt_table = (pte_t *)pgdir[pd_index];
     if (!pt_table) return NULL;
 
+    // printf("checkpoint 1 ");
+
     pte_t *pt2_table = (pte_t *)pt_table[pt_index];
     if (!pt2_table) return NULL;
+
+    // printf("checkpoint 2 ");
 
     pte_t *pt3_table = (pte_t *)pt2_table[pt2_index];
     if (!pt_table) return NULL;
 
+    // printf("checkpoint 3\n");
+
     pte_t phys_page = pt3_table[pt3_index];
+    printf("Physical page is: %p\n", phys_page);
     if (phys_page == 0) {
         printf("No physical page found\n");
         return NULL;
     }
     TLB_add(va, (void *)phys_page);
-    return (void *)((phys_page & ~((1 << offset) - 1)) | offset);
+    return (void *)((phys_page & ~((1 << offset_bits) - 1)) | offset);
 }
 
 
@@ -350,9 +361,9 @@ int map_page(pde_t *pgdir, void *va, void *pa)
     // Get the page directory index
     unsigned long vaddress = (unsigned long)va;
     unsigned long pd_index = get_top_bits(vaddress, pd_bits);
-    unsigned long pt_index = get_middle_bits(vaddress, pt_bits, offset_bits);
-    unsigned long pt2_index = get_middle_bits(vaddress, offset_bits + pd_bits + pt_bits, pt2_bits);
-    unsigned long pt3_index = get_middle_bits(vaddress, offset_bits + pd_bits + pt_bits + pt2_bits, pt3_bits);
+    unsigned long pt_index = get_middle_bits(vaddress, pt_bits, offset_bits+pt2_bits+pt3_bits);
+    unsigned long pt2_index = get_middle_bits(vaddress,pt2_bits, offset_bits + pt3_bits);
+    unsigned long pt3_index = get_middle_bits(vaddress, pt3_bits, offset_bits);
     printf("va: %p, pa: %p\n", va, pa);
     printf("pd_index: %d, pt_index: %d, pt2_index: %d, pt3_index: %d\n", pd_index, pt_index, pt2_index, pt3_index);
     // Get the page table entry
@@ -375,30 +386,28 @@ int map_page(pde_t *pgdir, void *va, void *pa)
     pte_t *pt2_table = (pte_t *)pt_table[pt_index];
     if (!pt2_table) {
         void* virt_page_address = get_next_avail(1, 0);
-        pt2_table = get_next_avail_phys();
-        if (!pt2_table || !virt_page_address) return -1;
-        pt_table[pt_index] = (pde_t)pt2_table;
+        void* phys_addr = get_next_avail_phys();
+        if (!phys_addr || !virt_page_address) return -1;
+        pt_table[pt_index] = (pde_t)phys_addr;
+        pt2_table = pt_table[pt_index];
     }
 
     pte_t *pt3_table = (pte_t *)pt2_table[pt2_index];
     if (!pt3_table) {
         void* virt_page_address = get_next_avail(1, 0);
-        pt3_table = get_next_avail_phys();
-        if (!pt3_table || !virt_page_address) return -1;
-        pt2_table[pd_index] = (pde_t)pt3_table;
+        void* phys_addr = get_next_avail_phys();
+        if (!phys_addr || !virt_page_address) return -1;
+        pt2_table[pd_index] = (pde_t)phys_addr;
+        pt3_table = pt2_table[pt2_index];
     }
 
 
     // Add TLB later
     // printf("before loading page; page_table: %p, pd_index %d, pt_index %d\n", page_table,pd_index ,pt_index);
 
-    void* phys_page_ptr = (void*) pt3_table[pt3_index];
-
-    if (phys_page_ptr == NULL) {
-        // Connect virtual address to physical address 
-        pt3_table[pt_index] = (pte_t) pa;
-
-    }
+    // Connect virtual address to physical address 
+    printf("Put physical address: %p into page located at %p\n", pa, pt3_table);
+    pt3_table[pt3_index] = (pte_t) pa;
 
 
     return 0;
@@ -611,6 +620,7 @@ int put_data(void *va, void *val, int size) {
             return -1;
         }
 
+        printf("put_data: physical address: %p, virtual address: %p, bytes_to_copy: %d\n", physical_address, vaddr, bytes_to_copy);
         memcpy(physical_address, src, bytes_to_copy);
 
         written += bytes_to_copy;
