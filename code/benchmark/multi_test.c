@@ -1,12 +1,12 @@
 #include "../my_vm.h"
 #include <time.h>
 #include <pthread.h>
-#define num_threads 42
+#define num_threads 48
 
 void *pointers[num_threads];
 int ids[num_threads];
 pthread_t threads[num_threads];
-int alloc_size = 10000;
+int alloc_size = 400;
 int matrix_size = 5;
 
 void *alloc_mem(void *id_arg) {
@@ -113,7 +113,7 @@ int main() {
     void *temp = (void *)1;
     int flag = 0;
     while (temp != NULL) {
-        temp = n_malloc(10);
+        temp = n_malloc(4000);
         if ((int)temp == old) {
             printf("Free Worked!\n");
             flag = 1;

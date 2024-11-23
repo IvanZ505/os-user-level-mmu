@@ -11,13 +11,23 @@
 
 #define get_bottom_bits(x, y) (((1UL << y) - 1) & (x))
 
+typedef uint16_t header_t;
+
+#define CREATE_HEADER(f, s) (((s) << 1) | (f))
+#define HEADER_GET_SIZE(h) ((h) >> 1)
+#define HEADER_GET_FREE(h) ((h) & 1)
+#define HEADER_GET_NEXT(h) ((h) + ((*(header_t*)h) >> 1))
+
 // Physical memory array. The size is defined by MEMSIZE
 void * physical_memory = NULL;
 
 // Bitmaps
 unsigned char *phys_page_bmap;
 unsigned char *virt_page_bmap;
-unsigned char *malloc_allocated;
+// unsigned char *malloc_allocated;
+unsigned char *alloc_page_bmap;
+unsigned char *full_page_bitmap;
+
 
 // page directory
 pde_t* pgdir;
@@ -39,6 +49,9 @@ pthread_mutex_t malloc_free_lock;
 unsigned int offset_bits;
 unsigned int pd_bits;
 unsigned int pt_bits;
+
+// Highest allocated page index
+int highest_pg_index = 2;
 
 void *get_next_avail(int num_pages, int isUser);
 
@@ -104,6 +117,11 @@ void set_physical_mem() {
 
     memset(physical_memory, 0, MEMSIZE);
 
+
+    for (int i = PGSIZE; i < MEMSIZE; i+=PGSIZE) {
+        CREATE_HEADER(1, PGSIZE);
+    }
+
     size_t phys_size = ((NUM_PHYS_PAGES + 7) / 8) * 8;
     phys_page_bmap = (unsigned char *)malloc(phys_size);
     if (phys_page_bmap == NULL) {
@@ -124,13 +142,22 @@ void set_physical_mem() {
     memset(virt_page_bmap, 0, virt_size);
 
     // Allows us to check if the process accesses memory not allocated to it 
-    malloc_allocated = (unsigned char *)malloc(virt_size);
-    if (malloc_allocated == NULL) {
-        perror("malloc_allocated failed");
+    alloc_page_bmap = (unsigned char *)malloc(virt_size);
+    if (alloc_page_bmap == NULL) {
+        perror("alloc_page_bmap failed");
         exit(EXIT_FAILURE);
     }
 
-    memset(malloc_allocated, 0, virt_size);
+    memset(alloc_page_bmap, 0, virt_size);
+
+    // Allows us to check a allocated page is full (therefore will not have any headers/no possibility for fragmentation) 
+    full_page_bitmap = (unsigned char *)malloc(virt_size);
+    if (full_page_bitmap == NULL) {
+        perror("full_page_bitmap failed");
+        exit(EXIT_FAILURE);
+    }
+
+    memset(full_page_bitmap, 0, virt_size);
 
     // Initialize Page Directory, we will set as first page in our physical memory.
     // equivalent to pde_t array of length PAGE_TABLE_ENTRIES_PER_LEVEL
@@ -139,12 +166,13 @@ void set_physical_mem() {
 
     set_bit_at_index(phys_page_bmap, 0);
     set_bit_at_index(virt_page_bmap, 0); 
+    set_bit_at_index(full_page_bitmap, 0); 
+    set_bit_at_index(alloc_page_bmap, 0); 
 
     // Grabs # of bits for each three sections of address based on page size
     offset_bits = int_log2(PGSIZE);
     pd_bits = (32 - offset_bits) / 2;
     pt_bits = 32 - pd_bits - offset_bits;
-
 
     // Initialize TLB lock for thread safety
     if (pthread_mutex_init(&tlb_lock, NULL) != 0) {
@@ -343,7 +371,7 @@ int map_page(pde_t *pgdir, void *va, void *pa)
     if (page_table == NULL) {
         // Allocate page to this new page table, need to find free page
 
-        void* virt_page_address = get_next_avail(1, 0);
+        void* virt_page_address = get_next_avail(PGSIZE, 0);
         void* phys_page_address = get_next_avail_phys();
 
         if (virt_page_address == NULL || phys_page_address == NULL) {
@@ -370,46 +398,178 @@ int map_page(pde_t *pgdir, void *va, void *pa)
 
 /*Function that gets the next available page
 */
-void *get_next_avail(int num_pages, int isUser) {
-    //Use virtual address bitmap to find the next free page
+// void *get_next_avail(int num_pages, int isUser) {
+//     //Use virtual address bitmap to find the next free page
 
-    int virt_page_num =  ((NUM_VIRT_PAGES + 7) / 8) * 8;
+//     int virt_page_num =  ((NUM_VIRT_PAGES + 7) / 8) * 8;
 
-    // First page is for directory, start at 1
-    unsigned long bit_index;
-    int found = 0;
-    for (bit_index = 1; bit_index < NUM_VIRT_PAGES; bit_index++) {
-        if (get_bit_at_index(virt_page_bmap, bit_index) == 0) {
-            int count = 1;
-            for (int j = 1; j < num_pages; j++) {
-                if (get_bit_at_index(virt_page_bmap, bit_index+j) == 0) {
-                    count += 1;
+//     // First page is for directory, start at 1
+//     unsigned long bit_index;
+//     int found = 0;
+//     for (bit_index = 1; bit_index < MAX_MEMSIZE; bit_index++) {
+//         if (get_bit_at_index(virt_page_bmap, bit_index) == 0) {
+//             int count = 1;
+//             for (int j = 1; j < num_pages; j++) {
+//                 if (get_bit_at_index(virt_page_bmap, bit_index+j) == 0) {
+//                     count += 1;
+//                 }
+//             }
+//             if (count == num_pages) {
+//                 found = 1;
+//                 break;
+//             }
+//             bit_index += num_pages-1;
+//         }
+//     }
+
+//     if (found == 0) {
+//         return NULL;
+//     }
+
+//     // marks as allocated
+//     for (int k = 0; k < num_pages; k++) {
+//         set_bit_at_index(virt_page_bmap, k+bit_index);
+//         if (isUser == 1) {
+//             set_bit_at_index(malloc_allocated, k+bit_index);    
+//         }
+//     }
+
+//     // bit_index gives us pdi and pti, we can set offset bits 0 (left shift)
+//     unsigned long virtual_address = bit_index << offset_bits;
+
+//     return (void*) virtual_address;
+// }
+
+//merges two blocks together and sets to freed
+static void mergeBlocks(char* firstBlock, char* secondBlock) {
+	*(header_t*)firstBlock = CREATE_HEADER(1, HEADER_GET_SIZE(*(header_t*)firstBlock) + HEADER_GET_SIZE(*(header_t*)secondBlock));
+}
+
+//checks if block after pointer is freed, if so, gets merged with head
+static void checkNextBlock(char* head, char* pointer) {
+    char* physMemoryEnd = (char*)physical_memory + MEMSIZE;
+	if ((HEADER_GET_NEXT(pointer) < physMemoryEnd) && HEADER_GET_FREE(*(header_t*)HEADER_GET_NEXT(pointer))) {
+		mergeBlocks((head), HEADER_GET_NEXT(pointer));
+	}
+}
+
+void *get_next_avail(int num_bytes, int isUser) {
+    // If allocation takes up multiple pages or entirety of one page, we will not fragment
+    int num_pages = (num_bytes + PGSIZE - 1) / PGSIZE;
+    
+    // The lower bound of num_bytes is set based on the idea
+    // That if we fragment any larger of a buffer, we will have no room for a header + data
+    if (num_pages > 1 || num_bytes >= (PGSIZE-4)) {
+        int found = 0;
+        unsigned long bit_index;
+        for (bit_index = 1; bit_index < MAX_MEMSIZE; bit_index++) {
+            if ((get_bit_at_index(virt_page_bmap, bit_index) == 0) && (get_bit_at_index(alloc_page_bmap, bit_index) == 0)) {
+                int count = 1;
+                for (int j = 1; j < num_pages; j++) {
+                    if (get_bit_at_index(virt_page_bmap, bit_index+j) == 0) {
+                        count += 1;
+                    }
                 }
+                if (count == num_pages) {
+                    found = 1;
+                    break;
+                }
+                bit_index += num_pages-1;
             }
-            if (count == num_pages) {
-                found = 1;
-                break;
+        }
+
+        if (found == 0) {
+            return NULL;
+        }
+
+        // marks as allocated
+        for (int k = 0; k < num_pages; k++) {
+            set_bit_at_index(virt_page_bmap, k+bit_index);
+            set_bit_at_index(full_page_bitmap, k+bit_index);
+            if (isUser == 0) {
+                set_bit_at_index(alloc_page_bmap, k+bit_index);    
             }
-            bit_index += num_pages-1;
+        }
+
+        highest_pg_index = (num_pages + bit_index > highest_pg_index) ? num_pages + bit_index : highest_pg_index;
+
+        unsigned long virtual_address = bit_index << offset_bits;
+        return (void*) virtual_address;
+    }
+
+    // We explore fragmentation
+
+    unsigned long page_index;
+    int found = 0;
+    void* first_new_full_page = NULL;
+
+    int needed_bytes = num_bytes + sizeof(header_t);
+    for (page_index = 1; page_index < highest_pg_index+1; page_index++) {
+        if (get_bit_at_index(full_page_bitmap, page_index) == 0) {
+            // We check if this page has some free bytes left
+            // If not, we reset to byte_count to 0 and find a new chunk
+            char* va = (char*) (page_index << offset_bits);
+            char* pa = (char*) translate(pgdir, va);
+            char* pa_old = pa;
+                        // printf("page index: %d, virtual_address: %x, physical : %x\n",page_index, va, pa);
+            printf("pa : %x\n", pa);
+            if (pa == NULL) {
+                // not mapped yet, we will save if no fragmented pages exist
+                if (first_new_full_page == NULL) {
+                    printf("first_new_full_page: %d\n", va);
+                    first_new_full_page = va;
+                }
+                continue;
+            }
+            // grabs first header of page block (address 0 of page)
+            header_t curHeader = *(header_t*)pa;
+            while ((!HEADER_GET_FREE(curHeader) || (HEADER_GET_SIZE(curHeader) < needed_bytes)) && (pa + HEADER_GET_SIZE(curHeader)) < ((char*)pa_old + PGSIZE)) {
+                // printf("va: %x, header size: %x, page_index: %d, pa_old: %x, pa: %x, max: %x\n", va, HEADER_GET_SIZE(curHeader), page_index,pa_old, pa, ((char*)pa + PGSIZE));
+                pa += HEADER_GET_SIZE(curHeader);
+                va += HEADER_GET_SIZE(curHeader);
+                curHeader = *(header_t*)pa;
+            }
+
+            // checks if we ran out of mem or no block large enough
+            if(!HEADER_GET_FREE(curHeader) || HEADER_GET_SIZE(curHeader) < needed_bytes)
+            {
+                continue;
+            }
+
+            // splits block if too large
+            if ((HEADER_GET_SIZE(curHeader)) > needed_bytes) {
+                *(header_t*)(pa + needed_bytes) = CREATE_HEADER(1, HEADER_GET_SIZE(curHeader) - needed_bytes);
+            }
+
+            //set current block to allocated and return:
+            *(header_t*)pa = CREATE_HEADER(0, needed_bytes);
+            printf("virtual_address: %x", va);
+	        return (void*)(va + sizeof(header_t));
         }
     }
 
-    if (found == 0) {
-        return NULL;
-    }
+    printf("bazing\n");
+    
+    // sets page as allocated
+    set_bit_at_index(virt_page_bmap, (unsigned long)first_new_full_page >> offset_bits);
 
-    // marks as allocated
-    for (int k = 0; k < num_pages; k++) {
-        set_bit_at_index(virt_page_bmap, k+bit_index);
-        if (isUser == 1) {
-            set_bit_at_index(malloc_allocated, k+bit_index);    
-        }
-    }
+    // If no fragmented pages are large enough, we write to a new page
+    char* new_pa =(char*) get_next_avail_phys();
 
-    // bit_index gives us pdi and pti, we can set offset bits 0 (left shift)
-    unsigned long virtual_address = bit_index << offset_bits;
+    // Setup two blocks
+    printf("needed byte: %d\n", needed_bytes);
+    *(header_t*)new_pa = CREATE_HEADER(0, needed_bytes);
+    *(header_t*)(new_pa + needed_bytes) = CREATE_HEADER(1, PGSIZE - needed_bytes);
 
-    return (void*) virtual_address;
+    printf("header size: %d\n", HEADER_GET_SIZE(*(header_t*)new_pa));
+
+
+    map_page(pgdir, first_new_full_page, new_pa);
+
+    highest_pg_index = ((unsigned long)first_new_full_page >> offset_bits > highest_pg_index) ? (unsigned long)first_new_full_page >> offset_bits : highest_pg_index;
+
+    return (void*)((char *)first_new_full_page + sizeof(header_t));
+
 }
 
 pthread_once_t once_control = PTHREAD_ONCE_INIT;
@@ -440,12 +600,19 @@ void *n_malloc(unsigned int num_bytes) {
     int num_pages = (num_bytes + PGSIZE - 1) / PGSIZE;
 
     // uint8_t type casting allows for pointer arithmetic
-    uint8_t* virtual_address = (uint8_t*)get_next_avail(num_pages, 1);
+    uint8_t* virtual_address = (uint8_t*)get_next_avail(num_bytes, 1);
 
     if (virtual_address == NULL) {
         pthread_mutex_unlock(&malloc_free_lock);
         printf("No avaliable memory left for %d bytes\n", num_bytes);
         return NULL;
+    }
+    
+    // If address is a subsection of a page, we already did physical allocaiton in get_next_avail
+    if ((unsigned long) virtual_address % PGSIZE != 0) {
+        pthread_mutex_unlock(&malloc_free_lock);
+        printf("before seg: %x\n", virtual_address);
+        return (void*) virtual_address;    
     }
 
     // Each virtual address should correlate to a physical page
@@ -477,18 +644,84 @@ void *n_malloc(unsigned int num_bytes) {
 void n_free(void *va, int size) {
     /* Part 1: Free the page table entries starting from this virtual address
      * (va). Also mark the pages free in the bitmap. Perform free only if the 
-     * memory from "va" to va+size is valid.
-     *
+     * memory from "va" to va+size is v 
      * Part 2: Also, remove the translation from the TLB
      */
 
     unsigned long vaddress = (unsigned long)va;
 
+
+    // fragmented free
+    if (vaddress % PGSIZE != 0) {
+
+        char* start = ((unsigned long)va) & ~((1 << offset_bits) - 1);
+
+        unsigned long offset = get_bottom_bits(vaddress, offset_bits);
+
+        // Check if address in in TLB
+        void* pageStart = (void*) TLB_check((void *)(vaddress));
+        if(pageStart == NULL) {
+            // If not, translate and add to TLB
+            pageStart = translate(pgdir, va);
+            if(pageStart == NULL) {
+                printf("get_data failed\n");
+                return;
+            }
+            TLB_add(vaddress, pageStart);
+            pageStart = ((unsigned long)pageStart) & ~((1 << offset_bits) - 1);
+        }
+
+        char* ptr = pageStart + offset;
+        
+        char* memoryEnd = (char*)pageStart + PGSIZE;
+
+        //grabs first block from page
+        char* curMem = (char*)pageStart;
+
+        //traverse blocks to find pointer or free block adjacent to pointer
+        while (curMem < memoryEnd) {	
+
+            // checks if current pointer is free and is before target pointer
+            if (
+                HEADER_GET_NEXT(curMem) < memoryEnd &&
+                HEADER_GET_FREE(*(header_t*)curMem) && 
+                HEADER_GET_NEXT(curMem) == ((char*)ptr - sizeof(header_t)) && 
+                !HEADER_GET_FREE(*(header_t*)((char*)ptr - sizeof(header_t)))
+                ) {
+                char* pointerHeader = (char*)ptr - sizeof(header_t);
+
+                mergeBlocks(curMem, pointerHeader);
+
+                // checks if block after pointerHeader is free, then merges if so
+                checkNextBlock(curMem, pointerHeader);
+
+                return;
+		    }
+
+
+            // checks if current pointer is target pointer
+            if ( curMem == ((char*)ptr - sizeof(header_t)) && !HEADER_GET_FREE(*(header_t*)((char*)ptr - sizeof(header_t)))) {
+
+                // checks if block after curMem is free, then merges if so
+                checkNextBlock(curMem, curMem);
+
+                // sets new block to freed
+                *(header_t*)curMem = CREATE_HEADER(1, HEADER_GET_SIZE(*(header_t*)curMem));
+                
+                return;
+            }
+
+            curMem = HEADER_GET_NEXT(curMem);
+	    }
+        printf("n_free failed\n");
+        return;
+    }
+
     int bit_index;
     for (int i = 0; i < size && vaddress < MAX_MEMSIZE; i++) {
         bit_index = vaddress >> offset_bits;
         // Avoid freeing unallocated memory and memory not allocated by process
-        if (get_bit_at_index(virt_page_bmap, bit_index) != 1 || get_bit_at_index(malloc_allocated, bit_index) != 1) {
+        if (get_bit_at_index(virt_page_bmap, bit_index) != 1 || get_bit_at_index(alloc_page_bmap, bit_index) == 1) {
             printf("n_free failed\n");
             return;
         }
@@ -508,7 +741,6 @@ void n_free(void *va, int size) {
         bit_index = vaddress >> offset_bits;
         if (prev_bit_index != bit_index) {
             set_bit_at_index(virt_page_bmap, bit_index);
-            set_bit_at_index(malloc_allocated, bit_index);
         }
         prev_bit_index = bit_index;
         vaddress += 1;
@@ -541,7 +773,6 @@ int put_data(void *va, void *val, int size) {
         printf("put_data failed");
         return -1;
     }
-
     
     while(written < size) {
         // Each time it returns here, recalculate for the next physical page addr.
@@ -558,14 +789,13 @@ int put_data(void *va, void *val, int size) {
             bytes_to_copy = size - written;
         }
 
-        // Makes sure we are writting data to memory already allocated
-        if (get_bit_at_index(malloc_allocated, vaddr>>offset_bits) == 0) {
-            printf("put_data failed: memory not allocated\n");
+        if (get_bit_at_index(alloc_page_bmap, vaddr>>offset_bits) == 1) {
+            printf("put_data failed: memory allocated\n");
             return -1;
         }
 
         memcpy(physical_address, src, bytes_to_copy);
-
+        // printf("WE WANT 1: %d\n", *(int*)physical_address);
         written += bytes_to_copy;
         src += bytes_to_copy;
         vaddr += bytes_to_copy;
@@ -599,8 +829,7 @@ void get_data(void *va, void *val, int size) {
         unsigned long offset = get_bottom_bits(vaddr, offset_bits);
 
         // Check if address in in TLB
-        void* physical_address = (void*) TLB_check((void *)vaddr);
-
+        void* physical_address = (void*) TLB_check((void *)(vaddr));
         if(physical_address == NULL) {
             // If not, translate and add to TLB
             physical_address = translate(pgdir, va);
@@ -608,7 +837,9 @@ void get_data(void *va, void *val, int size) {
                 printf("get_data failed\n");
                 return;
             }
-            TLB_add(va, physical_address);
+            TLB_add(vaddr, physical_address);
+        } else {
+            physical_address += offset;
         }
 
         // Check if size is greater than the page size
@@ -618,8 +849,7 @@ void get_data(void *va, void *val, int size) {
             bytes_to_copy = size - read;
         }
 
-        // Makes sure we are reading data already allocated
-        if(get_bit_at_index(malloc_allocated, vaddr>>offset_bits) == 0) {
+        if(get_bit_at_index(alloc_page_bmap, vaddr>>offset_bits) == 1) {
             printf("get_data failed: memory not allocated\n");
             pthread_mutex_unlock(&malloc_free_lock);
             return;
@@ -627,6 +857,7 @@ void get_data(void *va, void *val, int size) {
 
         unsigned char *dst = (unsigned char *)val;
         memcpy(val, (void *)physical_address, bytes_to_copy);
+        // printf("WE HAVE 1: %d\n", *(int*)physical_address);
         read += bytes_to_copy;
         dst += bytes_to_copy;
         vaddr += bytes_to_copy;

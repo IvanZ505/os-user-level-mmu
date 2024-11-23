@@ -14,7 +14,7 @@ int main() {
     int old_a = (int)a;
     void *b = n_malloc(ARRAY_SIZE);
     void *c = n_malloc(ARRAY_SIZE);
-    int x = 20;
+    int x = 1;
     int y, z;
     int i =0, j=0;
     int address_a = 0, address_b = 0;

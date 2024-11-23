@@ -4,6 +4,12 @@
         "stdio.h": "c",
         "stdbool.h": "c",
         "stdlib.h": "c",
-        "stdint.h": "c"
+        "stdint.h": "c",
+        "array": "c",
+        "bitset": "c",
+        "string_view": "c",
+        "initializer_list": "c",
+        "utility": "c",
+        "random": "c"
     }
 }
