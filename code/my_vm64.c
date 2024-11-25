@@ -119,7 +119,6 @@ void set_physical_mem() {
 
     
     size_t virt_size = ((NUM_VIRT_PAGES + 7) / 8) * 8;
-    printf("virt_size: %d\n", virt_size);
     virt_page_bmap = (unsigned char *)malloc(virt_size);
     if (virt_page_bmap == NULL) {
         perror("malloc virt_bmap failed");
@@ -140,14 +139,13 @@ void set_physical_mem() {
     // Initialize Page Directory, we will set as first page in our physical memory.
     // equivalent to pde_t array of length PAGE_TABLE_ENTRIES_PER_LEVEL
 
-    // We should probably replace with get_data/put_data
     pgdir = (pte_t*) physical_memory;
 
     set_bit_at_index(phys_page_bmap, 0);
     set_bit_at_index(virt_page_bmap, 0); 
 
     // Grabs # of bits for each three sections of address based on page size
-    offset_bits = int_log2(PGSIZE);
+    offset_bits = int_log2((PGSIZE));
     int remaining_bits = 64 - offset_bits;
     int remainder = remaining_bits % 4;
     pd_bits = (remaining_bits - remainder) / 4 + (remainder > 0 ? 1 : 0);
@@ -193,7 +191,6 @@ int TLB_add(void *va, void *pa)
     int hash = TLB_hash(vpn);
     struct tlb_entry new_entry = {vpn, pfn, 1};
     tlb_store[hash] = new_entry;
-    // printf("Added to TLB: vpn: %p, pfn: %p\n", vpn, pfn);
     pthread_mutex_unlock(&tlb_lock);
 
     return 0;
@@ -218,7 +215,6 @@ TLB_check(void *va) {
     // Check if the entry is valid and the vpn matches the va, mask the offset bits from the va
     unsigned long va_b = ((unsigned long)va) & ~((1 << offset_bits) - 1);
 
-    // printf("Checking TLB: va: %p\n", va_b);
     int hash = TLB_hash(va_b);
     struct tlb_entry entry = tlb_store[hash];
 
@@ -279,40 +275,29 @@ void *translate(pde_t *pgdir, void *va) {
 
     // Need to fix TLB for 64 bit
     pte_t phys_addr = (unsigned long) TLB_check(va);
-    // printf("phys_addr: %p\n", phys_addr);
+
     // All of these addresses return with some arbitrary offset
-    if(phys_addr != NULL) {
+    if((void*)phys_addr != NULL) {
         phys_addr = (phys_addr & ~((1 << offset_bits) - 1)) | offset;
         return (void *)phys_addr;
     }
-
-    printf("within translate with va: %p\n", va);
 
     unsigned long pd_index = get_top_bits(vaddress, pd_bits);
     unsigned long pt_index = get_middle_bits(vaddress, pt_bits, offset_bits+pt2_bits+pt3_bits);
     unsigned long pt2_index = get_middle_bits(vaddress,pt2_bits, offset_bits + pt3_bits);
     unsigned long pt3_index = get_middle_bits(vaddress, pt3_bits, offset_bits);
-
-    printf("unpacked: pd_index: %d, pt_index: %d, pt2_index: %d, pt3_index: %d\n", pd_index, pt_index, pt2_index, pt3_index);
     
     // Traverse the page table hierarchy
     pte_t *pt_table = (pte_t *)pgdir[pd_index];
     if (!pt_table) return NULL;
 
-    // printf("checkpoint 1 ");
-
     pte_t *pt2_table = (pte_t *)pt_table[pt_index];
     if (!pt2_table) return NULL;
-
-    // printf("checkpoint 2 ");
 
     pte_t *pt3_table = (pte_t *)pt2_table[pt2_index];
     if (!pt_table) return NULL;
 
-    // printf("checkpoint 3\n");
-
     pte_t phys_page = pt3_table[pt3_index];
-    printf("Physical page is: %p\n", phys_page);
     if (phys_page == 0) {
         printf("No physical page found\n");
         return NULL;
@@ -339,9 +324,7 @@ void* get_next_avail_phys() {
 
         set_bit_at_index(phys_page_bmap, free_phys_page_index);
 
-        void* physical_address = (void*)(((uint8_t*)physical_memory) + free_phys_page_index*PGSIZE);
-        // printf("index: %d, virtual address: %d, real address: %p\n",free_phys_page_index, free_phys_page_index<< 12, physical_address);
-
+        void* physical_address = (void*)(((uint8_t*)physical_memory) + free_phys_page_index*(PGSIZE));
         return physical_address;
 }
 
@@ -364,8 +347,6 @@ int map_page(pde_t *pgdir, void *va, void *pa)
     unsigned long pt_index = get_middle_bits(vaddress, pt_bits, offset_bits+pt2_bits+pt3_bits);
     unsigned long pt2_index = get_middle_bits(vaddress,pt2_bits, offset_bits + pt3_bits);
     unsigned long pt3_index = get_middle_bits(vaddress, pt3_bits, offset_bits);
-    printf("va: %p, pa: %p\n", va, pa);
-    printf("pd_index: %d, pt_index: %d, pt2_index: %d, pt3_index: %d\n", pd_index, pt_index, pt2_index, pt3_index);
     // Get the page table entry
     pte_t* pt_table = (pte_t*) pgdir[pd_index];
     if (pt_table == NULL) {
@@ -389,7 +370,7 @@ int map_page(pde_t *pgdir, void *va, void *pa)
         void* phys_addr = get_next_avail_phys();
         if (!phys_addr || !virt_page_address) return -1;
         pt_table[pt_index] = (pde_t)phys_addr;
-        pt2_table = pt_table[pt_index];
+        pt2_table = (pte_t*)pt_table[pt_index];
     }
 
     pte_t *pt3_table = (pte_t *)pt2_table[pt2_index];
@@ -398,15 +379,11 @@ int map_page(pde_t *pgdir, void *va, void *pa)
         void* phys_addr = get_next_avail_phys();
         if (!phys_addr || !virt_page_address) return -1;
         pt2_table[pd_index] = (pde_t)phys_addr;
-        pt3_table = pt2_table[pt2_index];
+        pt3_table = (pte_t*)pt2_table[pt2_index];
     }
 
 
-    // Add TLB later
-    // printf("before loading page; page_table: %p, pd_index %d, pt_index %d\n", page_table,pd_index ,pt_index);
-
     // Connect virtual address to physical address 
-    printf("Put physical address: %p into page located at %p\n", pa, pt3_table);
     pt3_table[pt3_index] = (pte_t) pa;
 
 
@@ -485,11 +462,10 @@ void *n_malloc(unsigned int num_bytes) {
     */
 
     // Rounds to smallest # of pages to fit num_bytes
-    int num_pages = (num_bytes + PGSIZE - 1) / PGSIZE;
+    int num_pages = (num_bytes + (PGSIZE) - 1) / (PGSIZE);
 
     // uint8_t type casting allows for pointer arithmetic
     uint64_t* virtual_address = (uint64_t*)get_next_avail(num_pages, 1);
-    printf("virtual address: %p\n", virtual_address);
     if (virtual_address == NULL) {
         pthread_mutex_unlock(&malloc_free_lock);
         printf("No avaliable memory left for %d bytes\n", num_bytes);
@@ -524,7 +500,7 @@ void *n_malloc(unsigned int num_bytes) {
 /* Responsible for releasing one or more memory pages using virtual address (va)
 */
 void n_free(void *va, int size) {
-    // pthread_mutex_lock(&malloc_free_lock);
+    pthread_mutex_lock(&malloc_free_lock);
 
     /* Part 1: Free the page table entries starting from this virtual address
      * (va). Also mark the pages free in the bitmap. Perform free only if the 
@@ -535,14 +511,13 @@ void n_free(void *va, int size) {
 
     unsigned long vaddress = (unsigned long)va;
 
-    // Lazy way of doing it, we might want to come up with another way
     int bit_index;
     for (int i = 0; i < size && vaddress < MAX_MEMSIZE; i++) {
         bit_index = vaddress >> offset_bits;
         // Avoid freeing unallocated memory and memory not allocated by process
         if (get_bit_at_index(virt_page_bmap, bit_index) != 1 || get_bit_at_index(malloc_allocated, bit_index) != 1) {
             printf("n_free failed\n");
-            // pthread_mutex_unlock(&malloc_free_lock);
+            pthread_mutex_unlock(&malloc_free_lock);
             return;
         }
         vaddress += 1;
@@ -551,7 +526,7 @@ void n_free(void *va, int size) {
     // Check that va+size isn't over our bounds
     if (vaddress >= MAX_MEMSIZE) {
         printf("n_free failed\n");
-        // pthread_mutex_unlock(&malloc_free_lock);
+        pthread_mutex_unlock(&malloc_free_lock);
         return;        
     }
 
@@ -567,7 +542,7 @@ void n_free(void *va, int size) {
         prev_bit_index = bit_index;
         vaddress += 1;
     }   
-    // pthread_mutex_unlock(&malloc_free_lock);
+    pthread_mutex_unlock(&malloc_free_lock);
 }
 
 
@@ -576,15 +551,11 @@ void n_free(void *va, int size) {
  * The function returns 0 if the put is successfull and -1 otherwise.
 */
 int put_data(void *va, void *val, int size) {
-    // pthread_mutex_lock(&malloc_free_lock);
-
     /* HINT: Using the virtual address and translate(), find the physical page. Copy
      * the contents of "val" to a physical page. NOTE: The "size" value can be larger 
      * than one page. Therefore, you may have to find multiple pages using translate()
      * function.
      */
-
-    // printf("Before:: put_data address: %p, value at pointer: %d\n", translate(pgdir, va), *((int*)translate(pgdir, va)));
 
     unsigned long vaddr = (unsigned long) va;
     unsigned char *src = (unsigned char *)val;
@@ -592,7 +563,6 @@ int put_data(void *va, void *val, int size) {
 
     if(!vaddr || !src ) {
         printf("put_data failed");
-        // pthread_mutex_unlock(&malloc_free_lock);
         return -1;
     }
 
@@ -602,13 +572,12 @@ int put_data(void *va, void *val, int size) {
         char *physical_address = (char *)translate(pgdir, (void *)vaddr);
         if (physical_address == NULL) {
             printf("put_data failed\n");
-            // pthread_mutex_unlock(&malloc_free_lock);
             return -1;
         }
 
         // Gives us the amount of bytes we can copy to the page
-        int page_offset = vaddr % PGSIZE;
-        int bytes_to_copy = PGSIZE - page_offset;
+        int page_offset = vaddr % (PGSIZE);
+        int bytes_to_copy = (PGSIZE) - page_offset;
         if (bytes_to_copy > (size - written)) {
             bytes_to_copy = size - written;
         }
@@ -616,11 +585,9 @@ int put_data(void *va, void *val, int size) {
         // Makes sure we are writting data to memory already allocated
         if (get_bit_at_index(malloc_allocated, vaddr>>offset_bits) == 0) {
             printf("put_data failed: memory not allocated\n");
-            // pthread_mutex_unlock(&malloc_free_lock);
             return -1;
         }
 
-        printf("put_data: physical address: %p, virtual address: %p, bytes_to_copy: %d\n", physical_address, vaddr, bytes_to_copy);
         memcpy(physical_address, src, bytes_to_copy);
 
         written += bytes_to_copy;
@@ -628,19 +595,14 @@ int put_data(void *va, void *val, int size) {
         vaddr += bytes_to_copy;
     }
 
-    // printf("After:: put_data address: %p, value at pointer: %d\n", translate(pgdir, va), *((int*)translate(pgdir, va)));
-
 
     /*return -1 if put_data failed and 0 if put is successfull*/
-    // pthread_mutex_unlock(&malloc_free_lock);
     return 0;
 }
 
 
 /*Given a virtual address, this function copies the contents of the page to val*/
 void get_data(void *va, void *val, int size) {
-    // pthread_mutex_lock(&malloc_free_lock);
-
     if(va == NULL || val == NULL || size <= 0) {
         printf("get_data failed: invalid parameters\n");
         return;
@@ -655,22 +617,16 @@ void get_data(void *va, void *val, int size) {
     
     unsigned long offset = get_bottom_bits((unsigned long)va, offset_bits);
     unsigned long vaddr = (unsigned long)va;
-    printf("Initial vaddr: %p\n", vaddr);
 
     while(read < size) {
         unsigned long offset = get_bottom_bits(vaddr, offset_bits);
 
         // Check if address in in TLB
-        // Commited it out cause it was giving me issues, could be because I'm stupid
-
-
         void* physical_address = (void*) TLB_check((void *)vaddr);
-        // printf("1 virtual and physical address: %p, %p\n", vaddr, physical_address);
 
         if(physical_address == NULL) {
             // If not, translate and add to TLB
             physical_address = translate(pgdir, va);
-            printf("2 virtual and physical address: %p, %p\n", vaddr, physical_address);
             if(physical_address == NULL) {
                 printf("get_data failed\n");
                 return;
@@ -679,8 +635,8 @@ void get_data(void *va, void *val, int size) {
         }
 
         // Check if size is greater than the page size
-        int page_offset = vaddr % PGSIZE;
-        int bytes_to_copy = PGSIZE - page_offset;
+        int page_offset = vaddr % (PGSIZE);
+        int bytes_to_copy = (PGSIZE) - page_offset;
         if(bytes_to_copy > (size - read)) {
             bytes_to_copy = size - read;
         }
@@ -698,11 +654,6 @@ void get_data(void *va, void *val, int size) {
         dst += bytes_to_copy;
         vaddr += bytes_to_copy;
     }
-
-    // printf("get_data address: %p, value stored: %d\n", translate(pgdir, vaddr), *((int*)translate(pgdir, vaddr)));
-    // printf("value stored at val: %d\n", *((int*)val));
-    // pthread_mutex_unlock(&malloc_free_lock);
-
 }
 
 
@@ -720,7 +671,6 @@ void mat_mult(void *mat1, void *mat2, int size, void *answer) {
      * getting the values from two matrices, you will perform multiplication and 
      * store the result to the "answer array"
      */
-    // pthread_mutex_lock(&malloc_free_lock);
 
     int x, y, val_size = sizeof(int);
     int i, j, k;
@@ -741,7 +691,6 @@ void mat_mult(void *mat1, void *mat2, int size, void *answer) {
             put_data((void *)address_c, (void *)&c, sizeof(int));
         }
     }
-    // pthread_mutex_unlock(&malloc_free_lock);
 
 }
 

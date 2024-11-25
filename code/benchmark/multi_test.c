@@ -1,7 +1,7 @@
 #include "../my_vm.h"
 #include <time.h>
 #include <pthread.h>
-#define num_threads 48
+#define num_threads 51
 
 void *pointers[num_threads];
 int ids[num_threads];
@@ -113,7 +113,7 @@ int main() {
     void *temp = (void *)1;
     int flag = 0;
     while (temp != NULL) {
-        temp = n_malloc(4000);
+        temp = n_malloc(10);
         if ((int)temp == old) {
             printf("Free Worked!\n");
             flag = 1;

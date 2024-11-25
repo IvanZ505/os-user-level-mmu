@@ -10,7 +10,7 @@
 
 //Add any important includes here which you may need
 
-#define PGSIZE 4096
+#define PGSIZE (4096)
 // #define PGSIZE 16384
 
 

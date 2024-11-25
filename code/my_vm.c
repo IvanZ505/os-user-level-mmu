@@ -134,14 +134,13 @@ void set_physical_mem() {
 
     // Initialize Page Directory, we will set as first page in our physical memory.
     // equivalent to pde_t array of length PAGE_TABLE_ENTRIES_PER_LEVEL
-
     pgdir = (pte_t*) physical_memory;
 
     set_bit_at_index(phys_page_bmap, 0);
     set_bit_at_index(virt_page_bmap, 0); 
 
     // Grabs # of bits for each three sections of address based on page size
-    offset_bits = int_log2(PGSIZE);
+    offset_bits = int_log2((PGSIZE));
     pd_bits = (32 - offset_bits) / 2;
     pt_bits = 32 - pd_bits - offset_bits;
 
@@ -267,7 +266,7 @@ void *translate(pde_t *pgdir, void *va) {
     pte_t phys_addr = (unsigned long) TLB_check(va);
 
     // All of these addresses return with some arbitrary offset
-    if(phys_addr != NULL) {
+    if((void*)phys_addr != NULL) {
         phys_addr = (phys_addr & ~((1 << offset_bits) - 1)) | offset;
         return (void *)phys_addr;
     }
@@ -314,7 +313,7 @@ void* get_next_avail_phys() {
 
         set_bit_at_index(phys_page_bmap, free_phys_page_index);
 
-        void* physical_address = (void*)(((uint8_t*)physical_memory) + free_phys_page_index*PGSIZE);
+        void* physical_address = (void*)(((uint8_t*)physical_memory) + free_phys_page_index*(PGSIZE));
 
         return physical_address;
 }
@@ -437,7 +436,7 @@ void *n_malloc(unsigned int num_bytes) {
     */
 
     // Rounds to smallest # of pages to fit num_bytes
-    int num_pages = (num_bytes + PGSIZE - 1) / PGSIZE;
+    int num_pages = (num_bytes + (PGSIZE) - 1) /(PGSIZE);
 
     // uint8_t type casting allows for pointer arithmetic
     uint8_t* virtual_address = (uint8_t*)get_next_avail(num_pages, 1);
@@ -481,6 +480,7 @@ void n_free(void *va, int size) {
      *
      * Part 2: Also, remove the translation from the TLB
      */
+    pthread_mutex_lock(&malloc_free_lock);
 
     unsigned long vaddress = (unsigned long)va;
 
@@ -490,6 +490,7 @@ void n_free(void *va, int size) {
         // Avoid freeing unallocated memory and memory not allocated by process
         if (get_bit_at_index(virt_page_bmap, bit_index) != 1 || get_bit_at_index(malloc_allocated, bit_index) != 1) {
             printf("n_free failed\n");
+            pthread_mutex_unlock(&malloc_free_lock);
             return;
         }
         vaddress += 1;
@@ -498,6 +499,7 @@ void n_free(void *va, int size) {
     // Check that va+size isn't over our bounds
     if (vaddress >= MAX_MEMSIZE) {
         printf("n_free failed\n");
+        pthread_mutex_unlock(&malloc_free_lock);
         return;        
     }
 
@@ -519,6 +521,8 @@ void n_free(void *va, int size) {
         tlb_store[TLB_hash((unsigned long)va)].valid = 0;
     }
     pthread_mutex_unlock(&tlb_lock);
+    pthread_mutex_unlock(&malloc_free_lock);
+
 }
 
 
@@ -552,8 +556,8 @@ int put_data(void *va, void *val, int size) {
         }
 
         // Gives us the amount of bytes we can copy to the page
-        int page_offset = vaddr % PGSIZE;
-        int bytes_to_copy = PGSIZE - page_offset;
+        int page_offset = vaddr % (PGSIZE);
+        int bytes_to_copy = (PGSIZE) - page_offset;
         if (bytes_to_copy > (size - written)) {
             bytes_to_copy = size - written;
         }
@@ -612,8 +616,8 @@ void get_data(void *va, void *val, int size) {
         }
 
         // Check if size is greater than the page size
-        int page_offset = vaddr % PGSIZE;
-        int bytes_to_copy = PGSIZE - page_offset;
+        int page_offset = vaddr % (PGSIZE);
+        int bytes_to_copy = (PGSIZE) - page_offset;
         if(bytes_to_copy > (size - read)) {
             bytes_to_copy = size - read;
         }

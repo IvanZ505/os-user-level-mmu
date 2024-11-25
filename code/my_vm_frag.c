@@ -1,4 +1,4 @@
-#include "my_vm.h"
+#include "my_vm_frag.h"
 #include <stdio.h>
 #include <sys/mman.h>
 #include <pthread.h> 
@@ -51,7 +51,7 @@ unsigned int pd_bits;
 unsigned int pt_bits;
 
 // Highest allocated page index
-int highest_pg_index = 2;
+int highest_pg_index = 1;
 
 void *get_next_avail(int num_pages, int isUser);
 
@@ -118,7 +118,7 @@ void set_physical_mem() {
     memset(physical_memory, 0, MEMSIZE);
 
 
-    for (int i = PGSIZE; i < MEMSIZE; i+=PGSIZE) {
+    for (int i = (PGSIZE); i < MEMSIZE; i+=(PGSIZE)) {
         CREATE_HEADER(1, PGSIZE);
     }
 
@@ -295,7 +295,7 @@ void *translate(pde_t *pgdir, void *va) {
     pte_t phys_addr = (unsigned long) TLB_check(va);
 
     // All of these addresses return with some arbitrary offset
-    if(phys_addr != NULL) {
+    if((void*)phys_addr != NULL) {
         phys_addr = (phys_addr & ~((1 << offset_bits) - 1)) | offset;
         return (void *)phys_addr;
     }
@@ -396,50 +396,6 @@ int map_page(pde_t *pgdir, void *va, void *pa)
 }
 
 
-/*Function that gets the next available page
-*/
-// void *get_next_avail(int num_pages, int isUser) {
-//     //Use virtual address bitmap to find the next free page
-
-//     int virt_page_num =  ((NUM_VIRT_PAGES + 7) / 8) * 8;
-
-//     // First page is for directory, start at 1
-//     unsigned long bit_index;
-//     int found = 0;
-//     for (bit_index = 1; bit_index < MAX_MEMSIZE; bit_index++) {
-//         if (get_bit_at_index(virt_page_bmap, bit_index) == 0) {
-//             int count = 1;
-//             for (int j = 1; j < num_pages; j++) {
-//                 if (get_bit_at_index(virt_page_bmap, bit_index+j) == 0) {
-//                     count += 1;
-//                 }
-//             }
-//             if (count == num_pages) {
-//                 found = 1;
-//                 break;
-//             }
-//             bit_index += num_pages-1;
-//         }
-//     }
-
-//     if (found == 0) {
-//         return NULL;
-//     }
-
-//     // marks as allocated
-//     for (int k = 0; k < num_pages; k++) {
-//         set_bit_at_index(virt_page_bmap, k+bit_index);
-//         if (isUser == 1) {
-//             set_bit_at_index(malloc_allocated, k+bit_index);    
-//         }
-//     }
-
-//     // bit_index gives us pdi and pti, we can set offset bits 0 (left shift)
-//     unsigned long virtual_address = bit_index << offset_bits;
-
-//     return (void*) virtual_address;
-// }
-
 //merges two blocks together and sets to freed
 static void mergeBlocks(char* firstBlock, char* secondBlock) {
 	*(header_t*)firstBlock = CREATE_HEADER(1, HEADER_GET_SIZE(*(header_t*)firstBlock) + HEADER_GET_SIZE(*(header_t*)secondBlock));
@@ -491,7 +447,7 @@ void *get_next_avail(int num_bytes, int isUser) {
             }
         }
 
-        highest_pg_index = (num_pages + bit_index > highest_pg_index) ? num_pages + bit_index : highest_pg_index;
+        highest_pg_index = ((num_pages + bit_index) > highest_pg_index) ? (num_pages + bit_index) : highest_pg_index;
 
         unsigned long virtual_address = bit_index << offset_bits;
         return (void*) virtual_address;
@@ -504,19 +460,16 @@ void *get_next_avail(int num_bytes, int isUser) {
     void* first_new_full_page = NULL;
 
     int needed_bytes = num_bytes + sizeof(header_t);
-    for (page_index = 1; page_index < highest_pg_index+1; page_index++) {
-        if (get_bit_at_index(full_page_bitmap, page_index) == 0) {
+    for (page_index = 1; page_index < highest_pg_index+5; page_index++) {
+        if (get_bit_at_index(full_page_bitmap, page_index) == 0 && get_bit_at_index(alloc_page_bmap, page_index) == 0) {
             // We check if this page has some free bytes left
             // If not, we reset to byte_count to 0 and find a new chunk
             char* va = (char*) (page_index << offset_bits);
             char* pa = (char*) translate(pgdir, va);
             char* pa_old = pa;
-                        // printf("page index: %d, virtual_address: %x, physical : %x\n",page_index, va, pa);
-            printf("pa : %x\n", pa);
             if (pa == NULL) {
                 // not mapped yet, we will save if no fragmented pages exist
                 if (first_new_full_page == NULL) {
-                    printf("first_new_full_page: %d\n", va);
                     first_new_full_page = va;
                 }
                 continue;
@@ -543,12 +496,9 @@ void *get_next_avail(int num_bytes, int isUser) {
 
             //set current block to allocated and return:
             *(header_t*)pa = CREATE_HEADER(0, needed_bytes);
-            printf("virtual_address: %x", va);
 	        return (void*)(va + sizeof(header_t));
         }
     }
-
-    printf("bazing\n");
     
     // sets page as allocated
     set_bit_at_index(virt_page_bmap, (unsigned long)first_new_full_page >> offset_bits);
@@ -557,16 +507,12 @@ void *get_next_avail(int num_bytes, int isUser) {
     char* new_pa =(char*) get_next_avail_phys();
 
     // Setup two blocks
-    printf("needed byte: %d\n", needed_bytes);
     *(header_t*)new_pa = CREATE_HEADER(0, needed_bytes);
     *(header_t*)(new_pa + needed_bytes) = CREATE_HEADER(1, PGSIZE - needed_bytes);
 
-    printf("header size: %d\n", HEADER_GET_SIZE(*(header_t*)new_pa));
-
-
     map_page(pgdir, first_new_full_page, new_pa);
 
-    highest_pg_index = ((unsigned long)first_new_full_page >> offset_bits > highest_pg_index) ? (unsigned long)first_new_full_page >> offset_bits : highest_pg_index;
+    highest_pg_index = (((unsigned long)first_new_full_page >> offset_bits) > highest_pg_index) ? (unsigned long)first_new_full_page >> offset_bits : highest_pg_index;
 
     return (void*)((char *)first_new_full_page + sizeof(header_t));
 
@@ -611,7 +557,6 @@ void *n_malloc(unsigned int num_bytes) {
     // If address is a subsection of a page, we already did physical allocaiton in get_next_avail
     if ((unsigned long) virtual_address % PGSIZE != 0) {
         pthread_mutex_unlock(&malloc_free_lock);
-        printf("before seg: %x\n", virtual_address);
         return (void*) virtual_address;    
     }
 
@@ -647,13 +592,13 @@ void n_free(void *va, int size) {
      * memory from "va" to va+size is v 
      * Part 2: Also, remove the translation from the TLB
      */
+    pthread_mutex_lock(&malloc_free_lock);
 
     unsigned long vaddress = (unsigned long)va;
 
 
     // fragmented free
     if (vaddress % PGSIZE != 0) {
-
         char* start = ((unsigned long)va) & ~((1 << offset_bits) - 1);
 
         unsigned long offset = get_bottom_bits(vaddress, offset_bits);
@@ -665,6 +610,7 @@ void n_free(void *va, int size) {
             pageStart = translate(pgdir, va);
             if(pageStart == NULL) {
                 printf("get_data failed\n");
+                pthread_mutex_unlock(&malloc_free_lock);
                 return;
             }
             TLB_add(vaddress, pageStart);
@@ -695,6 +641,7 @@ void n_free(void *va, int size) {
                 // checks if block after pointerHeader is free, then merges if so
                 checkNextBlock(curMem, pointerHeader);
 
+                pthread_mutex_unlock(&malloc_free_lock);
                 return;
 		    }
 
@@ -708,12 +655,15 @@ void n_free(void *va, int size) {
                 // sets new block to freed
                 *(header_t*)curMem = CREATE_HEADER(1, HEADER_GET_SIZE(*(header_t*)curMem));
                 
+                pthread_mutex_unlock(&malloc_free_lock);
                 return;
             }
 
             curMem = HEADER_GET_NEXT(curMem);
 	    }
         printf("n_free failed\n");
+
+        pthread_mutex_unlock(&malloc_free_lock);
         return;
     }
 
@@ -723,6 +673,7 @@ void n_free(void *va, int size) {
         // Avoid freeing unallocated memory and memory not allocated by process
         if (get_bit_at_index(virt_page_bmap, bit_index) != 1 || get_bit_at_index(alloc_page_bmap, bit_index) == 1) {
             printf("n_free failed\n");
+            pthread_mutex_unlock(&malloc_free_lock);
             return;
         }
         vaddress += 1;
@@ -731,6 +682,7 @@ void n_free(void *va, int size) {
     // Check that va+size isn't over our bounds
     if (vaddress >= MAX_MEMSIZE) {
         printf("n_free failed\n");
+        pthread_mutex_unlock(&malloc_free_lock);
         return;        
     }
 
@@ -751,6 +703,8 @@ void n_free(void *va, int size) {
         tlb_store[TLB_hash((unsigned long)va)].valid = 0;
     }
     pthread_mutex_unlock(&tlb_lock);
+
+    pthread_mutex_unlock(&malloc_free_lock);
 }
 
 
@@ -795,7 +749,6 @@ int put_data(void *va, void *val, int size) {
         }
 
         memcpy(physical_address, src, bytes_to_copy);
-        // printf("WE WANT 1: %d\n", *(int*)physical_address);
         written += bytes_to_copy;
         src += bytes_to_copy;
         vaddr += bytes_to_copy;
@@ -857,7 +810,6 @@ void get_data(void *va, void *val, int size) {
 
         unsigned char *dst = (unsigned char *)val;
         memcpy(val, (void *)physical_address, bytes_to_copy);
-        // printf("WE HAVE 1: %d\n", *(int*)physical_address);
         read += bytes_to_copy;
         dst += bytes_to_copy;
         vaddr += bytes_to_copy;

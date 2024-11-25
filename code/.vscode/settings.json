@@ -10,6 +10,7 @@
         "string_view": "c",
         "initializer_list": "c",
         "utility": "c",
-        "random": "c"
+        "random": "c",
+        "my_vm_frag.h": "c"
     }
 }
